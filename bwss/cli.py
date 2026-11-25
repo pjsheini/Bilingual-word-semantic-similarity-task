@@ -6,6 +6,7 @@ evaluate    P@1/5/10 for one dictionary
 run-all     every dictionary in a folder, with a summary table
 neighbours  nearest words to one or more words
 analogy     a : b :: c : ?
+similarity  Spearman correlation with human word-similarity scores
 """
 
 import argparse
@@ -18,6 +19,7 @@ from typing import Dict, List, Optional, Sequence
 from .embeddings import Embeddings
 from .evaluate import EvalResult, evaluate, load_dictionary, parse_pair, write_predictions
 from .explore import MultiSpace
+from .similarity import SimilarityResult, dataset_langs, evaluate_similarity, load_pairs
 
 KS = (1, 5, 10)
 
@@ -171,6 +173,62 @@ def cmd_analogy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dataset_files(paths: Sequence[str]) -> List[Path]:
+    files: List[Path] = []
+    for p in map(Path, paths):
+        files.extend(sorted(p.rglob("*.txt")) if p.is_dir() else [p])
+    return files
+
+
+def format_similarity(results: Sequence[SimilarityResult], markdown: bool = False) -> str:
+    rows = [["langs", "dataset", "pairs found", "coverage", "spearman"]]
+    for r in results:
+        rows.append([r.langs, r.dataset, f"{r.found}/{r.pairs}", f"{r.coverage:.1f}%", f"{r.spearman:.3f}"])
+    if markdown:
+        out = ["| Languages | Dataset | Pairs found | Coverage | Spearman ρ |", "|---|---|---:|---:|---:|"]
+        out += [f"| {a} | {b} | {c} | {d} | {e} |" for a, b, c, d, e in rows[1:]]
+        return "\n".join(out)
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    lines = ["  ".join(c.ljust(w) for c, w in zip(row, widths)) for row in rows]
+    lines.insert(1, "  ".join("-" * w for w in widths))
+    return "\n".join(lines)
+
+
+def cmd_similarity(args: argparse.Namespace) -> int:
+    cache: Dict[str, Embeddings] = {}
+    named: Dict[str, str] = {Path(v).stem: v for v in (args.vec or [])}
+
+    def space(lang: str) -> Optional[Embeddings]:
+        if args.shared:
+            return _load(args.shared, args, cache)
+        path = named.get(lang) or (_find_vectors(Path(args.vectors_dir), lang) if args.vectors_dir else None)
+        return _load(str(path), args, cache) if path else None
+
+    results: List[SimilarityResult] = []
+    for f in _dataset_files(args.datasets):
+        a, b = (args.lang.split("-") + [args.lang])[:2] if args.lang else dataset_langs(f)
+        left, right = space(a), space(b)
+        if left is None or right is None:
+            print(f"  skipping {f}: no vectors for {a}/{b}", file=sys.stderr)
+            continue
+        pairs = load_pairs(f)
+        fold = args.fold_accents
+        name = f.stem + (" (accent-folded)" if fold else "")
+        results.append(evaluate_similarity(pairs, left, right, fold, name, a if a == b else f"{a}-{b}"))
+    if not results:
+        print("No datasets could be evaluated.", file=sys.stderr)
+        return 1
+    results.sort(key=lambda r: (len(r.langs), r.langs, r.dataset))
+    print(format_similarity(results))
+    if args.out_dir:
+        out = Path(args.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "similarity.json").write_text(json.dumps([r.summary() for r in results], indent=2), encoding="utf-8")
+        (out / "similarity.md").write_text(format_similarity(results, markdown=True) + "\n", encoding="utf-8")
+        print(f"\nWrote similarity.md and similarity.json to {out}/", file=sys.stderr)
+    return 0
+
+
 # --------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m bwss", description=__doc__,
@@ -215,6 +273,20 @@ def build_parser() -> argparse.ArgumentParser:
         x.add_argument("words", nargs="+", help="words; use lang:word to pick a language, e.g. es:no")
         load_opts(x)
         x.set_defaults(func=func)
+
+    s = sub.add_parser("similarity", help="Spearman correlation with human similarity scores")
+    s.add_argument("datasets", nargs="*", default=["data/similarity"],
+                   help="dataset files or folders (default data/similarity); the parent folder "
+                        "names the language(s): de/gur350.txt, en-de/rg65.txt")
+    s.add_argument("--vectors-dir", default="vectors", help="folder with <lang>.npz or <lang>.vec files")
+    s.add_argument("--vec", action="append", help="embedding file named <lang>.vec/.npz; repeatable")
+    s.add_argument("--shared", help="one embedding file for every language (e.g. the BUC model)")
+    s.add_argument("--lang", help="override the language(s), e.g. de or en-de")
+    s.add_argument("--fold-accents", action="store_true",
+                   help="match words ignoring accents (for vocabularies without accent-less spellings)")
+    s.add_argument("--out-dir", default="results", help="where to write similarity.md/json ('' to skip)")
+    load_opts(s)
+    s.set_defaults(func=cmd_similarity)
     return p
 
 
