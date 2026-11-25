@@ -13,6 +13,10 @@ Evaluates **cross-lingual word embeddings** with two standard tests:
    [WE-Word-similarity-task](https://github.com/pjsheini/WE-Word-similarity-task)
    repository.
 
+It can also **train** the model the project was built for: Bilingual
+Universal Concepts (BUC) embeddings (Sheinidashtegol & Musaev, 2019). See
+[Training BUC embeddings](#training-buc-embeddings).
+
 The project was first written to test the *Bilingual Universal Concepts*
 (BUC) model. Version 2 is a rewrite: plain Python 3.9+, NumPy only, and
 fast. It works with any aligned embeddings in fastText `.vec` format.
@@ -179,6 +183,93 @@ the coverage column shows how many were kept.
   already contain the unaccented web spellings, so it's off by default.
   With it on, ρ is 0.537 instead of 0.548.
 
+## Training BUC embeddings
+
+`python -m bwss buc` implements the method of the paper, *Learning
+Cross-lingual Word Embeddings with Universal Concepts* (Sheinidashtegol &
+Musaev, IJWSC 10(3), 2019, [doi:10.5121/ijwsc.2019.10302](https://doi.org/10.5121/ijwsc.2019.10302)).
+It replaces the scripts in
+[MUC-Encoding-decoding-](https://github.com/pjsheini/MUC-Encoding-decoding-) and
+[UCGenerator-Clusterring](https://github.com/pjsheini/UCGenerator-Clusterring).
+
+| Step | What happens | Command | Old script |
+|---|---|---|---|
+| 1. Concepts | Bilingual dictionaries become a graph (words are nodes, translations are edges). Each connected component is one universal concept. | `buc concepts` | `UConceptByClustering.py` |
+| 2. Rewrite | Each concept word in each monolingual corpus is replaced by its concept ID. | `buc rewrite` | `words2uuid.py` |
+| 3. Train | word2vec or fastText on all rewritten corpora together (window 10, as in the paper). | `buc train` | (not in the repos) |
+| 4. Expand | Every word in a concept gets the concept's vector. One aligned `<lang>.npz` per language, plus `shared.vec` with `--shared`. | `buc train` | `uuid2word.py` |
+
+`buc pipeline` runs all four steps. On your own machine:
+
+```bash
+pip install -r requirements-buc.txt      # gensim
+
+# MUSE *training* dictionaries (0-5000). The test sets in dicts/ are 5000-6500.
+for p in en-es es-en; do
+  curl -O https://dl.fbaipublicfiles.com/arrival/dictionaries/$p.0-5000.txt
+done
+
+# Corpora: plain text, one sentence or paragraph per line, tokenised
+# (e.g. Wikipedia dumps through wikiextractor). The paper used en + es Wikipedia.
+python -m bwss buc pipeline \
+    --dict en-es.0-5000.txt --dict es-en.0-5000.txt \
+    --exclude dicts/en-es.5000-6500.txt --exclude dicts/es-en.5000-6500.txt \
+    --corpus en:enwiki.txt --corpus es:eswiki.txt \
+    --out vectors_buc --shared
+
+python -m bwss run-all    --vectors-dir vectors_buc   # word translation
+python -m bwss similarity --vectors-dir vectors_buc   # word similarity
+```
+
+Add more languages with more dictionaries and `--corpus` entries. Concepts
+then span all of them; this is the paper's multilingual MUC variant.
+`buc_stats.json` records the concept counts, the share of corpus tokens
+replaced, and the training time.
+
+**Things that differ from the original scripts, on purpose:**
+
+* **Test words are kept out of concepts** (`--exclude`). If a test pair were
+  inside a concept, the two words would share one vector by construction,
+  and the translation test would measure the dictionary, not the
+  embeddings. The paper reports about 35k source words per pair, which
+  sounds like the full MUSE dictionaries (these include the test range).
+  Use the 0–5000 files, or the full ones plus `--exclude`.
+* **Words are tracked per language.** English *no* and Spanish *no* only
+  join if a dictionary pair links them. Other tokens are written as
+  `en:word` / `es:word` in the rewritten corpus, so the two vocabularies
+  don't collide in the shared model.
+* **The corpus is rewritten line by line.** `words2uuid.py` read 1 KB
+  chunks, which split words at chunk edges. `uuid2word.py` wrote each
+  vector as `b'0.12 …'` on Python 3, which made the output unloadable.
+  Both are fixed.
+* **Optional `--max-concept-size N`.** Connected components can chain
+  loosely related words into very large concepts. The paper keeps them
+  all, and so does the default.
+* **Concept files from the original project** (`UC_Nodelist`/`GUID` JSON
+  lines) can be reused with `--legacy-langs en es`.
+* **The Google Translate + OPTICS clustering variant in UCGenerator-Clusterring
+  is not ported.** It isn't the method in the paper, and it depended on
+  scraping the Google Translate website.
+
+Words in one concept have *identical* vectors, so when a concept has several
+words in the target language, their order in a top-k list is a tie. This is
+inherent to the method and is worth keeping in mind when reading P@1.
+
+**Reported results, for comparison.** The paper's bilingual test counts a
+pair as correct when the translation is among the 10 nearest neighbours,
+which is P@10 here. BUCWE scored 40.95 (en→es), 53.68 (es→en),
+52.53 (en→de), 33.53 (de→en). On word similarity it reported 0.67 on
+GUR350 and 0.60 on Spanish WS353. The demo baseline above gets
+76.6 / 74.1 / 71.1 / 60.2 P@10 (CSLS) and 0.68 / 0.55. The setups differ,
+so only a rerun with this pipeline gives a like-for-like comparison.
+
+The pipeline is tested end to end on a synthetic two-language corpus
+(`tests/test_buc.py`). Words held out of every concept still land among
+their translation's topic words (P@5 = 100%), which shows the shared
+concept contexts carry meaning across languages. This workspace couldn't
+download Wikipedia or the MUSE training dictionaries, so a full-scale run
+is still to do.
+
 ## How it works
 
 ```
@@ -188,6 +279,7 @@ bwss/
   evaluate.py    dictionary loading, precision@k, per-word predictions
   explore.py     nearest neighbours and analogies across aligned spaces
   similarity.py  word-similarity datasets, Spearman correlation
+  buc.py         BUC training: concepts, corpus rewrite, word2vec/fastText, expand
   cli.py         python -m bwss ...
 tools/build_demo_vectors.py   builds the demo embeddings above
 tools/get_similarity_data.py  downloads the similarity benchmarks (pinned commits)
@@ -258,7 +350,7 @@ cd ..
 python tools/build_demo_vectors.py --models-dir models --out vectors   # ~5 min
 python -m bwss run-all --vectors-dir vectors                          # ~25 min on 2 cores (CSLS stats, cached after)
 python tools/get_similarity_data.py && python -m bwss similarity      # ~1 min
-python -m unittest discover -s tests -t .
+python -m unittest discover -s tests -t .   # BUC end-to-end test runs if gensim is installed
 ```
 
 ## What changed from version 1

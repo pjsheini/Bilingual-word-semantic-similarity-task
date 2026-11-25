@@ -1,0 +1,1 @@
+gensim>=4.0   # only for "python -m bwss buc" (training BUC embeddings)
