@@ -183,7 +183,7 @@ python -m unittest discover -s tests -t .
 
 Version 1 (see git history) was a set of research scripts that couldn't run:
 
-* `translate.py` was Python 2 only; the other scripts were Python 3.
+* All scripts wrote in Python 2 only; 
 * The neighbour script wrote a file format the scorer couldn't read, and it
   crashed at the end with an undefined variable.
 * Paths were hard-coded Windows paths, and the language pair was fixed in
