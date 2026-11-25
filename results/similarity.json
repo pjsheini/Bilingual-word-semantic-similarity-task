@@ -1,0 +1,182 @@
+[
+  {
+    "dataset": "gur350",
+    "langs": "de",
+    "pairs": 350,
+    "found": 236,
+    "spearman": 0.6804,
+    "seconds": 0.0,
+    "coverage": 67.43
+  },
+  {
+    "dataset": "gur65",
+    "langs": "de",
+    "pairs": 65,
+    "found": 44,
+    "spearman": 0.7079,
+    "seconds": 0.0,
+    "coverage": 67.69
+  },
+  {
+    "dataset": "simlex999",
+    "langs": "de",
+    "pairs": 999,
+    "found": 857,
+    "spearman": 0.3321,
+    "seconds": 0.0,
+    "coverage": 85.79
+  },
+  {
+    "dataset": "ws353",
+    "langs": "de",
+    "pairs": 350,
+    "found": 292,
+    "spearman": 0.44,
+    "seconds": 0.0,
+    "coverage": 83.43
+  },
+  {
+    "dataset": "zg222",
+    "langs": "de",
+    "pairs": 222,
+    "found": 122,
+    "spearman": 0.438,
+    "seconds": 0.0,
+    "coverage": 54.95
+  },
+  {
+    "dataset": "men",
+    "langs": "en",
+    "pairs": 3000,
+    "found": 3000,
+    "spearman": 0.7821,
+    "seconds": 0.01,
+    "coverage": 100.0
+  },
+  {
+    "dataset": "rg65",
+    "langs": "en",
+    "pairs": 65,
+    "found": 65,
+    "spearman": 0.7839,
+    "seconds": 0.0,
+    "coverage": 100.0
+  },
+  {
+    "dataset": "simlex999",
+    "langs": "en",
+    "pairs": 999,
+    "found": 999,
+    "spearman": 0.3162,
+    "seconds": 0.01,
+    "coverage": 100.0
+  },
+  {
+    "dataset": "ws353",
+    "langs": "en",
+    "pairs": 353,
+    "found": 353,
+    "spearman": 0.6684,
+    "seconds": 0.0,
+    "coverage": 100.0
+  },
+  {
+    "dataset": "rg65",
+    "langs": "es",
+    "pairs": 65,
+    "found": 65,
+    "spearman": 0.8581,
+    "seconds": 0.0,
+    "coverage": 100.0
+  },
+  {
+    "dataset": "ws353",
+    "langs": "es",
+    "pairs": 352,
+    "found": 345,
+    "spearman": 0.5479,
+    "seconds": 0.0,
+    "coverage": 98.01
+  },
+  {
+    "dataset": "hj",
+    "langs": "ru",
+    "pairs": 398,
+    "found": 389,
+    "spearman": 0.6664,
+    "seconds": 0.0,
+    "coverage": 97.74
+  },
+  {
+    "dataset": "simlex999",
+    "langs": "ru",
+    "pairs": 999,
+    "found": 959,
+    "spearman": 0.3005,
+    "seconds": 0.0,
+    "coverage": 96.0
+  },
+  {
+    "dataset": "ws353",
+    "langs": "ru",
+    "pairs": 350,
+    "found": 339,
+    "spearman": 0.5911,
+    "seconds": 0.0,
+    "coverage": 96.86
+  },
+  {
+    "dataset": "rg65",
+    "langs": "en-de",
+    "pairs": 125,
+    "found": 103,
+    "spearman": 0.7047,
+    "seconds": 0.0,
+    "coverage": 82.4
+  },
+  {
+    "dataset": "semeval17",
+    "langs": "en-de",
+    "pairs": 914,
+    "found": 560,
+    "spearman": 0.613,
+    "seconds": 0.0,
+    "coverage": 61.27
+  },
+  {
+    "dataset": "simlex999",
+    "langs": "en-de",
+    "pairs": 1595,
+    "found": 1477,
+    "spearman": 0.2775,
+    "seconds": 0.01,
+    "coverage": 92.6
+  },
+  {
+    "dataset": "ws353",
+    "langs": "en-de",
+    "pairs": 638,
+    "found": 579,
+    "spearman": 0.5234,
+    "seconds": 0.0,
+    "coverage": 90.75
+  },
+  {
+    "dataset": "rg65",
+    "langs": "en-es",
+    "pairs": 126,
+    "found": 126,
+    "spearman": 0.8254,
+    "seconds": 0.0,
+    "coverage": 100.0
+  },
+  {
+    "dataset": "semeval17",
+    "langs": "en-es",
+    "pairs": 978,
+    "found": 730,
+    "spearman": 0.6841,
+    "seconds": 0.0,
+    "coverage": 74.64
+  }
+]

@@ -6,3 +6,6 @@ models/
 *.whl
 *.vec
 *.npz
+data/similarity/
+buc_work/
+vectors_buc/

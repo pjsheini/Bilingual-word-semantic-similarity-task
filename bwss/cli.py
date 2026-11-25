@@ -6,6 +6,9 @@ evaluate    P@1/5/10 for one dictionary
 run-all     every dictionary in a folder, with a summary table
 neighbours  nearest words to one or more words
 analogy     a : b :: c : ?
+similarity  Spearman correlation with human word-similarity scores
+buc         train Bilingual Universal Concepts embeddings (concepts, rewrite,
+            train, pipeline)
 """
 
 import argparse
@@ -18,6 +21,7 @@ from typing import Dict, List, Optional, Sequence
 from .embeddings import Embeddings
 from .evaluate import EvalResult, evaluate, load_dictionary, parse_pair, write_predictions
 from .explore import MultiSpace
+from .similarity import SimilarityResult, dataset_langs, evaluate_similarity, load_pairs
 
 KS = (1, 5, 10)
 
@@ -171,6 +175,140 @@ def cmd_analogy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dataset_files(paths: Sequence[str]) -> List[Path]:
+    files: List[Path] = []
+    for p in map(Path, paths):
+        files.extend(sorted(p.rglob("*.txt")) if p.is_dir() else [p])
+    return files
+
+
+def format_similarity(results: Sequence[SimilarityResult], markdown: bool = False) -> str:
+    rows = [["langs", "dataset", "pairs found", "coverage", "spearman"]]
+    for r in results:
+        rows.append([r.langs, r.dataset, f"{r.found}/{r.pairs}", f"{r.coverage:.1f}%", f"{r.spearman:.3f}"])
+    if markdown:
+        out = ["| Languages | Dataset | Pairs found | Coverage | Spearman ρ |", "|---|---|---:|---:|---:|"]
+        out += [f"| {a} | {b} | {c} | {d} | {e} |" for a, b, c, d, e in rows[1:]]
+        return "\n".join(out)
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    lines = ["  ".join(c.ljust(w) for c, w in zip(row, widths)) for row in rows]
+    lines.insert(1, "  ".join("-" * w for w in widths))
+    return "\n".join(lines)
+
+
+def cmd_similarity(args: argparse.Namespace) -> int:
+    cache: Dict[str, Embeddings] = {}
+    named: Dict[str, str] = {Path(v).stem: v for v in (args.vec or [])}
+
+    def space(lang: str) -> Optional[Embeddings]:
+        if args.shared:
+            return _load(args.shared, args, cache)
+        path = named.get(lang) or (_find_vectors(Path(args.vectors_dir), lang) if args.vectors_dir else None)
+        return _load(str(path), args, cache) if path else None
+
+    results: List[SimilarityResult] = []
+    for f in _dataset_files(args.datasets):
+        a, b = (args.lang.split("-") + [args.lang])[:2] if args.lang else dataset_langs(f)
+        left, right = space(a), space(b)
+        if left is None or right is None:
+            print(f"  skipping {f}: no vectors for {a}/{b}", file=sys.stderr)
+            continue
+        pairs = load_pairs(f)
+        fold = args.fold_accents
+        name = f.stem + (" (accent-folded)" if fold else "")
+        results.append(evaluate_similarity(pairs, left, right, fold, name, a if a == b else f"{a}-{b}"))
+    if not results:
+        print("No datasets could be evaluated.", file=sys.stderr)
+        return 1
+    results.sort(key=lambda r: (len(r.langs), r.langs, r.dataset))
+    print(format_similarity(results))
+    if args.out_dir:
+        out = Path(args.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "similarity.json").write_text(json.dumps([r.summary() for r in results], indent=2), encoding="utf-8")
+        (out / "similarity.md").write_text(format_similarity(results, markdown=True) + "\n", encoding="utf-8")
+        print(f"\nWrote similarity.md and similarity.json to {out}/", file=sys.stderr)
+    return 0
+
+
+def _corpus_specs(specs: Sequence[str]) -> List[tuple]:
+    out = []
+    for spec in specs:
+        lang, sep, path = spec.partition(":")
+        if not sep or not lang or not path:
+            raise SystemExit(f"--corpus must look like LANG:PATH, got {spec!r}")
+        out.append((lang, Path(path)))
+    return out
+
+
+def _buc_concepts(args: argparse.Namespace):
+    from . import buc
+    concepts, stats = buc.build_concepts(args.dict, args.exclude or (), args.max_concept_size,
+                                         lowercase=not args.keep_case)
+    for k, v in stats.items():
+        print(f"  {k:<24} {v:,}" if isinstance(v, int) else f"  {k:<24} {v}", file=sys.stderr)
+    return concepts, stats
+
+
+def _buc_train_and_save(args, concepts, rewritten: List[Path], langs: List[str], out: Path) -> dict:
+    from . import buc
+    t0 = time.time()
+    print(f"Training {args.algorithm} (dim={args.dim}, window={args.window}, "
+          f"min_count={args.min_count}, epochs={args.epochs})...", file=sys.stderr)
+    tokens, vectors = buc.train(rewritten, args.algorithm, args.dim, args.window, args.min_count,
+                                args.epochs, not args.cbow, args.workers, args.seed)
+    spaces = buc.expand(tokens, vectors, concepts, langs)
+    out.mkdir(parents=True, exist_ok=True)
+    info = {"tokens": len(tokens), "train_seconds": round(time.time() - t0, 1)}
+    for lang, emb in spaces.items():
+        emb.save(out / f"{lang}.npz")
+        info[f"{lang}_words"] = len(emb)
+        print(f"  wrote {out / (lang + '.npz')}: {len(emb):,} words", file=sys.stderr)
+    if args.shared:
+        shared = buc.shared_space(spaces)
+        shared.save(out / "shared.vec")
+        print(f"  wrote {out / 'shared.vec'}: {len(shared):,} words", file=sys.stderr)
+    return info
+
+
+def cmd_buc(args: argparse.Namespace) -> int:
+    from . import buc
+    if args.buc_command == "concepts":
+        concepts, _ = _buc_concepts(args)
+        concepts.save(args.out)
+        print(f"Wrote {len(concepts):,} concepts to {args.out}", file=sys.stderr)
+        return 0
+    if args.buc_command == "rewrite":
+        concepts = buc.Concepts.load(args.concepts, args.legacy_langs or ())
+        for lang, path in _corpus_specs(args.corpus):
+            dst = Path(args.out_dir) / f"{lang}.txt"
+            s = buc.rewrite_corpus(concepts, lang, path, dst, lowercase=not args.keep_case)
+            print(f"  {lang}: {s['tokens']:,} tokens, {s['replaced_pct']}% replaced by concepts -> {dst}",
+                  file=sys.stderr)
+        return 0
+    if args.buc_command == "train":
+        concepts = buc.Concepts.load(args.concepts, args.legacy_langs or ())
+        _buc_train_and_save(args, concepts, [Path(c) for c in args.corpus], args.langs, Path(args.out))
+        return 0
+    # pipeline
+    work, out = Path(args.work_dir), Path(args.out)
+    concepts, stats = _buc_concepts(args)
+    concepts.save(work / "concepts.jsonl")
+    rewritten, langs = [], []
+    for lang, path in _corpus_specs(args.corpus):
+        dst = work / "corpus" / f"{lang}.txt"
+        s = buc.rewrite_corpus(concepts, lang, path, dst, lowercase=not args.keep_case)
+        stats[f"{lang}_tokens"], stats[f"{lang}_replaced_pct"] = s["tokens"], s["replaced_pct"]
+        print(f"  {lang}: {s['tokens']:,} tokens, {s['replaced_pct']}% replaced by concepts", file=sys.stderr)
+        rewritten.append(dst)
+        langs.append(lang)
+    stats.update(_buc_train_and_save(args, concepts, rewritten, langs, out))
+    (out / "buc_stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    print(f"\nDone. Evaluate with:\n  python -m bwss run-all --vectors-dir {out}\n"
+          f"  python -m bwss similarity --vectors-dir {out}", file=sys.stderr)
+    return 0
+
+
 # --------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m bwss", description=__doc__,
@@ -215,6 +353,72 @@ def build_parser() -> argparse.ArgumentParser:
         x.add_argument("words", nargs="+", help="words; use lang:word to pick a language, e.g. es:no")
         load_opts(x)
         x.set_defaults(func=func)
+
+    s = sub.add_parser("similarity", help="Spearman correlation with human similarity scores")
+    s.add_argument("datasets", nargs="*", default=["data/similarity"],
+                   help="dataset files or folders (default data/similarity); the parent folder "
+                        "names the language(s): de/gur350.txt, en-de/rg65.txt")
+    s.add_argument("--vectors-dir", default="vectors", help="folder with <lang>.npz or <lang>.vec files")
+    s.add_argument("--vec", action="append", help="embedding file named <lang>.vec/.npz; repeatable")
+    s.add_argument("--shared", help="one embedding file for every language (e.g. the BUC model)")
+    s.add_argument("--lang", help="override the language(s), e.g. de or en-de")
+    s.add_argument("--fold-accents", action="store_true",
+                   help="match words ignoring accents (for vocabularies without accent-less spellings)")
+    s.add_argument("--out-dir", default="results", help="where to write similarity.md/json ('' to skip)")
+    load_opts(s)
+    s.set_defaults(func=cmd_similarity)
+
+    b = sub.add_parser("buc", help="train Bilingual Universal Concepts (BUC) embeddings")
+    bsub = b.add_subparsers(dest="buc_command", required=True)
+
+    def concept_opts(x: argparse.ArgumentParser) -> None:
+        x.add_argument("--dict", action="append", required=True,
+                       help="bilingual dictionary <src>-<tgt>.*.txt (repeat; e.g. MUSE en-es.0-5000.txt)")
+        x.add_argument("--exclude", action="append",
+                       help="dictionary whose words must stay out of concepts (repeat; e.g. the test sets)")
+        x.add_argument("--max-concept-size", type=int, default=None,
+                       help="drop concepts with more words than this (default: keep all, as the paper)")
+
+    def train_opts(x: argparse.ArgumentParser) -> None:
+        x.add_argument("--out", default="vectors_buc", help="folder for <lang>.npz (default vectors_buc)")
+        x.add_argument("--algorithm", choices=["word2vec", "fasttext"], default="word2vec")
+        x.add_argument("--dim", type=int, default=300)
+        x.add_argument("--window", type=int, default=10, help="context window (paper: 10)")
+        x.add_argument("--min-count", type=int, default=5)
+        x.add_argument("--epochs", type=int, default=5)
+        x.add_argument("--cbow", action="store_true", help="CBOW instead of skip-gram")
+        x.add_argument("--workers", type=int, default=4)
+        x.add_argument("--seed", type=int, default=1)
+        x.add_argument("--shared", action="store_true", help="also write one shared.vec with all languages")
+
+    def case_opt(x: argparse.ArgumentParser) -> None:
+        x.add_argument("--keep-case", action="store_true", help="don't lowercase dictionary and corpus")
+
+    def legacy_opt(x: argparse.ArgumentParser) -> None:
+        x.add_argument("--legacy-langs", nargs="+",
+                       help="languages for an original-project concept file (no language info), e.g. en es")
+
+    bc = bsub.add_parser("concepts", help="1. build concepts from bilingual dictionaries")
+    concept_opts(bc); case_opt(bc)
+    bc.add_argument("--out", default="concepts.jsonl")
+
+    br = bsub.add_parser("rewrite", help="2. replace concept words in corpora with concept IDs")
+    br.add_argument("--concepts", required=True)
+    br.add_argument("--corpus", action="append", required=True, help="LANG:PATH (repeat)")
+    br.add_argument("--out-dir", default="buc_work/corpus")
+    case_opt(br); legacy_opt(br)
+
+    bt = bsub.add_parser("train", help="3+4. train on rewritten corpora and write per-language vectors")
+    bt.add_argument("--concepts", required=True)
+    bt.add_argument("--corpus", nargs="+", required=True, help="rewritten corpus files")
+    bt.add_argument("--langs", nargs="+", required=True, help="languages to write, e.g. en es")
+    train_opts(bt); legacy_opt(bt)
+
+    bp = bsub.add_parser("pipeline", help="all steps: concepts, rewrite, train, write vectors")
+    concept_opts(bp); train_opts(bp); case_opt(bp)
+    bp.add_argument("--corpus", action="append", required=True, help="LANG:PATH (repeat), e.g. en:enwiki.txt")
+    bp.add_argument("--work-dir", default="buc_work", help="concepts and rewritten corpora go here")
+    b.set_defaults(func=cmd_buc)
     return p
 
 
