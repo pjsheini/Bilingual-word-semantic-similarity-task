@@ -1,4 +1,4 @@
-# Bilingual Word Semantic Similarity Task
+# Cross-lingual Word Embeddings with Universal Concepts
 
 Measures how well a **cross-lingual word-embedding model** puts a word and
 its translation close together. For every word in a bilingual test
