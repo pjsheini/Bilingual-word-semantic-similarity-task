@@ -140,5 +140,61 @@ class TestExploreAndCli(unittest.TestCase):
             self.assertTrue((d / "results" / "predictions-en-es-csls.tsv").exists())
 
 
+class TestSimilarity(unittest.TestCase):
+    def test_load_pairs_detects_formats(self):
+        from bwss.similarity import load_pairs
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "gur.txt").write_text("#WORD1:WORD2:Value:POS1:POS2\nAuto:Fahrt:2.75:n:n\n", encoding="utf-8")
+            (d / "tab.txt").write_text("tiger\tcat\t7.35\r\n", encoding="utf-8")
+            (d / "csv.txt").write_text("Word1,Word2,Score\nalt,neu,0.08\n", encoding="utf-8")
+            (d / "ws.txt").write_text("sun sunlight 50.0\n", encoding="utf-8")
+            self.assertEqual(load_pairs(d / "gur.txt"), [("Auto", "Fahrt", 2.75)])
+            self.assertEqual(load_pairs(d / "tab.txt"), [("tiger", "cat", 7.35)])
+            self.assertEqual(load_pairs(d / "csv.txt"), [("alt", "neu", 0.08)])
+            self.assertEqual(load_pairs(d / "ws.txt"), [("sun", "sunlight", 50.0)])
+
+    def test_spearman(self):
+        from bwss.similarity import rankdata, spearman
+        self.assertAlmostEqual(spearman([1, 2, 3, 4], [10, 20, 30, 40]), 1.0)
+        self.assertAlmostEqual(spearman([1, 2, 3, 4], [4, 3, 2, 1]), -1.0)
+        self.assertEqual(list(rankdata(np.array([5, 1, 5, 2]))), [3.5, 1.0, 3.5, 2.0])
+        # value checked against scipy.stats.spearmanr
+        self.assertAlmostEqual(spearman([1, 2, 2, 3, 5], [2, 1, 3, 3, 4]), 0.7631578947368421)
+
+    def test_evaluate_similarity_monolingual_crosslingual_and_oov(self):
+        from bwss.similarity import evaluate_similarity
+        en, es = _toy_spaces()
+        sims = en.vectors @ en.vectors.T
+        pairs = [(f"word{i}", f"word{j}", float(sims[i, j])) for i in range(5) for j in range(5, 10)]
+        r = evaluate_similarity(pairs + [("word1", "unknown", 3.0)], en)
+        self.assertEqual((r.pairs, r.found), (26, 25))
+        self.assertAlmostEqual(r.spearman, 1.0)
+        cross = [(f"word{i}", f"palabra{j}", float(sims[i, j])) for i in range(5) for j in range(5, 10)]
+        self.assertGreater(evaluate_similarity(cross, en, es).spearman, 0.9)
+
+    def test_lookup_case_and_accents(self):
+        from bwss.similarity import Lookup
+        emb = Embeddings(["química", "auto", "quimica"], np.eye(3), "es")
+        self.assertEqual(Lookup(emb)("Auto"), 1)
+        self.assertEqual(Lookup(emb)("quimica"), 2)
+        self.assertEqual(Lookup(emb, fold_accents=True)("quimica"), 0)
+
+    def test_cli_similarity(self):
+        en, es = _toy_spaces()
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            en.save(d / "vectors" / "en.npz")
+            es.save(d / "vectors" / "es.npz")
+            for folder, w2 in (("en", "word"), ("en-es", "palabra")):
+                (d / "data" / folder).mkdir(parents=True)
+                (d / "data" / folder / "toy.txt").write_text(
+                    "\n".join(f"word{i}\t{w2}{i + 1}\t{i}" for i in range(10)), encoding="utf-8")
+            code = main(["similarity", str(d / "data"), "--vectors-dir", str(d / "vectors"),
+                         "--out-dir", str(d / "results")])
+            self.assertEqual(code, 0)
+            self.assertIn("en-es", (d / "results" / "similarity.md").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

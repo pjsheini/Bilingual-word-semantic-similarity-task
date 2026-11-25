@@ -1,10 +1,17 @@
 # Bilingual Word Semantic Similarity Task
 
-Measures how well a **cross-lingual word-embedding model** puts a word and
-its translation close together. For every word in a bilingual test
-dictionary, the code looks up the nearest words in the other language and
-checks whether a correct translation is among the top 1, 5 or 10
-(precision@k, the standard MUSE word-translation benchmark).
+Evaluates **cross-lingual word embeddings** with two standard tests:
+
+1. **Word translation.** For every word in a bilingual test dictionary, look
+   up the nearest words in the other language and check whether a correct
+   translation is among the top 1, 5 or 10 (precision@k, the MUSE benchmark).
+2. **Word similarity.** For word pairs that people have scored for similarity
+   (German GUR350, Spanish WS353, English-German RG65, ...), check how well
+   the vectors' cosine similarities rank the pairs the same way people did
+   (Spearman's ρ). This covers both single languages and pairs of languages.
+   It folds in the old
+   [WE-Word-similarity-task](https://github.com/pjsheini/WE-Word-similarity-task)
+   repository.
 
 The project was first written to test the *Bilingual Universal Concepts*
 (BUC) model. Version 2 is a rewrite: plain Python 3.9+, NumPy only, and
@@ -27,9 +34,14 @@ python -m bwss run-all --vectors-dir vectors
 # Explore: nearest words and analogies, across languages
 python -m bwss neighbours --vec vectors/en.npz --vec vectors/es.npz king es:rey
 python -m bwss analogy    --vec vectors/en.npz --vec vectors/es.npz man king woman  hombre rey woman
+
+# Word similarity: download the benchmarks once, then score every dataset
+python tools/get_similarity_data.py                 # -> data/similarity/<lang>/*.txt
+python -m bwss similarity --vectors-dir vectors     # or --shared buc_en-es.vec
 ```
 
-`run-all` prints a table and writes `results/summary.md`,
+`similarity` prints a table and writes `results/similarity.md` and
+`results/similarity.json`. `run-all` prints a table and writes `results/summary.md`,
 `results/summary.json`, and one `predictions-<pair>-<method>.tsv` per run,
 listing each word's gold translations, the rank of the first hit and the
 top-10 candidates with scores.
@@ -123,6 +135,50 @@ es:rey: monarca [es] 0.836, príncipe [es] 0.795, emperador [es] 0.725, vasallo 
 
 </details>
 
+### Word similarity
+
+Spearman's ρ between cosine similarity and human scores (1.0 means the same
+ranking as people). Pairs with an out-of-vocabulary word are skipped, and
+the coverage column shows how many were kept.
+
+| Languages | Dataset | Pairs found | Coverage | Spearman ρ |
+|---|---|---:|---:|---:|
+| de | gur350 | 236/350 | 67.4% | 0.680 |
+| de | gur65 | 44/65 | 67.7% | 0.708 |
+| de | simlex999 | 857/999 | 85.8% | 0.332 |
+| de | ws353 | 292/350 | 83.4% | 0.440 |
+| de | zg222 | 122/222 | 55.0% | 0.438 |
+| en | men | 3000/3000 | 100.0% | 0.782 |
+| en | rg65 | 65/65 | 100.0% | 0.784 |
+| en | simlex999 | 999/999 | 100.0% | 0.316 |
+| en | ws353 | 353/353 | 100.0% | 0.668 |
+| es | rg65 | 65/65 | 100.0% | 0.858 |
+| es | ws353 | 345/352 | 98.0% | 0.548 |
+| ru | hj | 389/398 | 97.7% | 0.666 |
+| ru | simlex999 | 959/999 | 96.0% | 0.300 |
+| ru | ws353 | 339/350 | 96.9% | 0.591 |
+| en-de | rg65 | 103/125 | 82.4% | 0.705 |
+| en-de | semeval17 | 560/914 | 61.3% | 0.613 |
+| en-de | simlex999 | 1477/1595 | 92.6% | 0.278 |
+| en-de | ws353 | 579/638 | 90.8% | 0.523 |
+| en-es | rg65 | 126/126 | 100.0% | 0.825 |
+| en-es | semeval17 | 730/978 | 74.6% | 0.684 |
+
+* **Within each language,** the vectors do well on relatedness sets (MEN
+  0.78, RG65 0.78–0.86, GUR65 0.71) and worse on SimLex-999 (about 0.3).
+  SimLex scores strict similarity, and plain distributional vectors are
+  known to blur that with relatedness (*cup* ~ *coffee*).
+* **Across languages,** the aligned spaces keep most of the monolingual
+  quality. en–es RG65 is 0.83, close to the Spanish-only 0.86, so the
+  alignment doesn't destroy within-language structure.
+* **German coverage is low** (55–68% on GUR/ZG). The German demo vocabulary
+  is only 112k words and these datasets are full of rare compounds. This is
+  a limit of the demo vectors, not the method.
+* **Spanish WS353 is distributed without accents** (`quimica`).
+  `--fold-accents` matches words ignoring accents, but the demo vectors
+  already contain the unaccented web spellings, so it's off by default.
+  With it on, ρ is 0.537 instead of 0.548.
+
 ## How it works
 
 ```
@@ -131,11 +187,14 @@ bwss/
   retrieval.py   batched top-k search with NumPy; CSLS with on-disk cache
   evaluate.py    dictionary loading, precision@k, per-word predictions
   explore.py     nearest neighbours and analogies across aligned spaces
+  similarity.py  word-similarity datasets, Spearman correlation
   cli.py         python -m bwss ...
 tools/build_demo_vectors.py   builds the demo embeddings above
+tools/get_similarity_data.py  downloads the similarity benchmarks (pinned commits)
 tests/                        unit tests on synthetic data
 dicts/                        MUSE test dictionaries
-results/                      demo results (summary + per-word TSVs)
+results/                      demo results (translation summary, per-word TSVs,
+                              similarity.md/json)
 ```
 
 Each lookup is one matrix multiplication over L2-normalised vectors, done in
@@ -146,6 +205,28 @@ In a shared space (`--shared`, or `--src` and `--tgt` pointing at the same
 file), a word can't return itself as its translation, but a gold translation
 spelled the same as the source (`okay` → `okay`) counts as a rank-1 hit. This
 is the same rule the original `translate.py` used.
+
+### Word-similarity datasets
+
+`tools/get_similarity_data.py` downloads 20 datasets from pinned commits of
+public GitHub mirrors and rewrites each as `word1<TAB>word2<TAB>score`. The
+parent folder names the language(s), so `en-de/rg65.txt` pairs an English
+word with a German one. `bwss similarity` also reads the original files
+directly (tab, `:`-separated GUR format, comma or space separated). The
+datasets keep their own licences, so they aren't stored in this repo.
+
+| Languages | Datasets | Source |
+|---|---|---|
+| de | GUR65, GUR350 (Gurevych 2005), ZG222 (Zesch & Gurevych 2006), WS353, SimLex-999 (Leviant & Reichart 2015) | UKP TU Darmstadt; Multilingual WS353/SimLex |
+| es | WS353 (Hassan & Mihalcea 2009), RG65 (Camacho-Collados et al. 2015) | |
+| ru | HJ (Panchenko et al. 2016), WS353, SimLex-999 (Leviant & Reichart 2015) | |
+| en | WS353, SimLex-999, RG65, MEN | |
+| en-de | RG65, WS353, SimLex-999, SemEval-2017 | cross-lingual |
+| en-es | RG65, SemEval-2017 | cross-lingual |
+
+Mirrors: [vecto-ai/word-benchmarks](https://github.com/vecto-ai/word-benchmarks),
+[benathi/multisense-prob-fasttext](https://github.com/benathi/multisense-prob-fasttext),
+[k-kawakami/embedding-evaluation](https://github.com/k-kawakami/embedding-evaluation).
 
 ### Test dictionaries
 
@@ -176,6 +257,7 @@ done
 cd ..
 python tools/build_demo_vectors.py --models-dir models --out vectors   # ~5 min
 python -m bwss run-all --vectors-dir vectors                          # ~25 min on 2 cores (CSLS stats, cached after)
+python tools/get_similarity_data.py && python -m bwss similarity      # ~1 min
 python -m unittest discover -s tests -t .
 ```
 
@@ -197,8 +279,14 @@ All of that is replaced by the `bwss` package. The original cleaning rules
 `--clean`. The analogy filter that depended on the private BUC concept file
 (`PreUni3Concepts-final.txt`) was dropped.
 
+The word-similarity test replaces the separate `WE-Word-similarity-task`
+repository. That script only wrote `human score : cosine` lines and never
+computed the correlation. It imported modules that lived in this repo,
+and it handled one hard-coded dataset at a time.
+
 ## Credits
 
-Test dictionaries: Facebook Research MUSE. Version 1's loader and analogy
+Test dictionaries: Facebook Research MUSE. Word-similarity datasets: the
+authors cited above, via the mirrors listed. Version 1's loader and analogy
 code were adapted from Martin Konicek's public word-vectors tutorial. Demo
 vectors: spaCy models (MIT) and `wordfreq` (Apache 2.0 code, CC BY-SA data).

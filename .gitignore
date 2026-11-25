@@ -6,3 +6,4 @@ models/
 *.whl
 *.vec
 *.npz
+data/similarity/
