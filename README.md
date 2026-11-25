@@ -1,120 +1,204 @@
 # Bilingual Word Semantic Similarity Task
 
-Scripts for testing how well a **bilingual word-embedding model** places a word
-and its translation close together in a shared vector space.
+Measures how well a **cross-lingual word-embedding model** puts a word and
+its translation close together. For every word in a bilingual test
+dictionary, the code looks up the nearest words in the other language and
+checks whether a correct translation is among the top 1, 5 or 10
+(precision@k, the standard MUSE word-translation benchmark).
 
-The model under test is the *Bilingual Universal Concepts* (BUC) model: a
-cross-lingual embedding where words from two languages (e.g. English and
-Spanish) live in one 300-dimensional space. If the space is well aligned, the
-nearest neighbours of an English word should include its Spanish translation.
+The project was first written to test the *Bilingual Universal Concepts*
+(BUC) model. Version 2 is a rewrite: plain Python 3.9+, NumPy only, and
+fast. It works with any aligned embeddings in fastText `.vec` format.
 
-> **Status:** archived research code. The embedding files and concept files
-> the scripts expect are **not** in this repository, so the scripts cannot be
-> run as they are. See [Known issues](#known-issues).
+## Quick start
 
-## How the evaluation works
+```bash
+pip install -r requirements.txt            # just numpy
 
-1. **Load the embeddings.** `load.py` reads a fastText-style `.vec` file
-   (one word per line, followed by 300 floats), L2-normalises every vector,
-   drops tokens that are too short or start/end with punctuation, and removes
-   near-duplicates (`U.S.` / `US`).
-2. **Find nearest neighbours.** For every source word in a bilingual test
-   dictionary, `WE-10MostSimilarWords-MT.py` ranks all vocabulary words by
-   cosine similarity and writes the 10 closest to a results file.
-3. **Score translation accuracy.** `translate.py` reads that neighbour list
-   and checks whether any gold translation from the dictionary appears in the
-   top-k neighbours. It reports hits per rank and an overall
-   precision@k-style percentage.
+# Evaluate one direction: separate aligned files per language...
+python -m bwss evaluate --src en.vec --tgt es.vec --dict dicts/en-es.5000-6500.txt
 
-`main.py` is an exploration script: it prints nearest neighbours and solves
-analogies (`man : king :: woman : ?`) within and across languages
-(`hombre : rey :: woman : ?`), optionally mapping words to shared concept
-IDs from a BUC concept file.
+# ...or one shared bilingual file, like the original BUC model
+python -m bwss evaluate --shared buc_en-es.vec --dict dicts/en-es.5000-6500.txt
 
-## Repository contents
+# Evaluate every dictionary in dicts/ against vectors/<lang>.vec|.npz
+python -m bwss run-all --vectors-dir vectors
 
-| File | Purpose |
-|---|---|
-| `load.py` | Load and clean a `.vec` embedding file |
-| `vectors.py` | Pure-Python vector maths (dot, add, sub, normalise, cosine) |
-| `word.py` | `Word` class: text, vector, frequency rank |
-| `main.py` | Nearest-neighbour and analogy exploration, incl. cross-lingual analogies |
-| `WE-10MostSimilarWords-MT.py` | Writes the top-10 nearest neighbours for every word in a test dictionary |
-| `translate.py` | Scores those neighbour lists against the gold translations |
-| `*.5000-6500.txt` | Bilingual test dictionaries (see below) |
+# Explore: nearest words and analogies, across languages
+python -m bwss neighbours --vec vectors/en.npz --vec vectors/es.npz king es:rey
+python -m bwss analogy    --vec vectors/en.npz --vec vectors/es.npz man king woman  hombre rey woman
+```
+
+`run-all` prints a table and writes `results/summary.md`,
+`results/summary.json`, and one `predictions-<pair>-<method>.tsv` per run,
+listing each word's gold translations, the rank of the first hit and the
+top-10 candidates with scores.
+
+### Options worth knowing
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--method nn\|csls\|both` | `both` | Cosine nearest neighbour, CSLS, or both |
+| `--max-vocab N` | 200000 | Search the N most frequent words (MUSE standard); `0` = all |
+| `--clean` | off | The original project's filter: drop 1-char/punctuation tokens and near-duplicates (`U.S.` / `US`) |
+| `--lowercase` | off | Lowercase the vocabulary (the dictionaries are lowercase) |
+| `--cache-dir` | `.cache` | Where CSLS statistics are cached between runs |
+
+**CSLS** (Cross-domain Similarity Local Scaling, Conneau et al. 2018) reduces
+the "hubness" problem, where a few words are close to everything. It
+usually adds several points of accuracy. Its per-word statistics take a
+few minutes to compute for a 200k vocabulary, so they are cached.
+
+## Demo results
+
+The BUC model files aren't public, so I built baseline embeddings from
+public data (`tools/build_demo_vectors.py`) to show the pipeline running:
+
+* 300-d vectors from spaCy's `*_lg` models, ranked by frequency with
+  `wordfreq` (en 188k words, es 198k, de 112k, ru 200k).
+* Spanish, German and Russian mapped onto English with an orthogonal
+  (Procrustes) transform, learned **without a bilingual dictionary**.
+  The seed is identically spelled words and numerals, refined by 8 rounds
+  of self-learning. No word from any test dictionary is used in the seed.
+* Evaluated on Python 3.9 with `--max-vocab 200000` (the default).
+
+| Pair | Evaluated words | NN P@1 | NN P@5 | NN P@10 | CSLS P@1 | CSLS P@5 | CSLS P@10 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| en → es | 1,413 (94%) | 45.2 | 65.0 | 70.6 | **53.6** | 72.0 | 76.6 |
+| es → en | 1,450 (97%) | 50.2 | 67.4 | 73.4 | **51.9** | 69.0 | 74.1 |
+| en → de | 1,304 (87%) | 38.5 | 55.4 | 62.2 | **48.2** | 65.6 | 71.1 |
+| de → en | 1,275 (85%) | 37.6 | 56.2 | 61.3 | **38.4** | 54.7 | 60.2 |
+| en → ru | 1,469 (98%) | 28.0 | 44.2 | 49.6 | **34.3** | 53.0 | 59.6 |
+| ru → en | 1,432 (95%) | **43.9** | 63.7 | 68.9 | 43.1 | 62.0 | 67.5 |
+
+Precision in %. Full per-word output is in [`results/`](results/).
+
+* CSLS helps most when translating **out of** English: +8 to +10 points
+  P@1 for en→es and en→de. Into English it changes little.
+* English–Russian is hardest. The two languages share almost no spellings,
+  so the unsupervised seed is just 275 numerals and Latin-script tokens.
+  It still ends up at 34–44% P@1.
+* German coverage is lower (85–87%) because spaCy's German vectors cover
+  only 112k words.
+
+Precision is computed over test words whose source word and at least one
+correct translation are in the vocabulary ("evaluated"). This is the MUSE
+protocol.
+
+For comparison, MUSE reports roughly 80% P@1 for en-es with fastText
+Wikipedia vectors and supervised alignment. These baseline numbers are lower
+because spaCy's vectors are noisier and the alignment is unsupervised. They're
+a reference point for comparing other models, not a ceiling.
+
+<details>
+<summary>Example translations (en-es, CSLS)</summary>
+
+| English | Gold | Rank of first hit | Top 5 candidates |
+|---|---|---:|---|
+| dancer | bailarina, bailarín | 1 | bailarín, bailarina, bailarin, coreógrafo, coreógrafa |
+| phenomenon | fenómeno | 1 | fenómeno, epifenómeno, vulcanismo, meteorismo, fenónemo |
+| novelists | novelistas | 1 | novelistas, escritores, historietistas, literatos, escritoras |
+| abilities | habilidades, capacidades | 2 | habilidad, habilidades, destrezas, destreza, aptitudes |
+| discover | descubrir, descubra, ... | 2 | descubrirás, descubra, redescubra, oportunidad, atractor |
+| relocated | trasladó, trasladado | 8 | reubicado, relocalizado, desplazado, mudado, emplazado |
+| arguing | discutiendo | – | argumente, argumentista, argumentario, argumento, argumentar |
+
+Misses are often near-misses. Several are other inflections of the right word
+(`descubrirás`), and some are valid synonyms the dictionary doesn't list
+(`reubicado` for *relocated*).
+
+Cross-lingual exploration with the same vectors:
+
+```
+$ python -m bwss analogy --vec vectors/en.npz --vec vectors/es.npz --vec vectors/de.npz \
+    man king woman  hombre rey mujer  man king mujer  mann könig frau
+man : king :: woman : queen      [queen [en] 0.633, prince [en] 0.584, lady [en] 0.582]
+hombre : rey :: mujer : reina    [reina [es] 0.727, princesa [es] 0.645, monarca [es] 0.612]
+man : king :: mujer : queen      [queen [en] 0.619, prince [en] 0.541, esposa [es] 0.527]
+mann : könig :: frau : königin   [königin [de] 0.794, könige [de] 0.698, königs [de] 0.696]
+
+$ python -m bwss neighbours --vec vectors/en.npz --vec vectors/es.npz --vec vectors/de.npz -n 6 es:rey
+es:rey: monarca [es] 0.836, príncipe [es] 0.795, emperador [es] 0.725, vasallo [es] 0.715, trono [es] 0.710, könig [de] 0.706
+```
+
+</details>
+
+## How it works
+
+```
+bwss/
+  embeddings.py  load .vec/.npz, normalise, optional cleaning, save
+  retrieval.py   batched top-k search with NumPy; CSLS with on-disk cache
+  evaluate.py    dictionary loading, precision@k, per-word predictions
+  explore.py     nearest neighbours and analogies across aligned spaces
+  cli.py         python -m bwss ...
+tools/build_demo_vectors.py   builds the demo embeddings above
+tests/                        unit tests on synthetic data
+dicts/                        MUSE test dictionaries
+results/                      demo results (summary + per-word TSVs)
+```
+
+Each lookup is one matrix multiplication over L2-normalised vectors, done in
+batches, so evaluating 1,500 words against a 200k-word vocabulary takes about
+2 seconds. The original pure-Python loop took several seconds **per word**.
+
+In a shared space (`--shared`, or `--src` and `--tgt` pointing at the same
+file), a word can't return itself as its translation, but a gold translation
+spelled the same as the source (`okay` → `okay`) counts as a rank-1 hit. This
+is the same rule the original `translate.py` used.
 
 ### Test dictionaries
 
-The dictionaries are the standard **MUSE** bilingual test sets from Facebook
-Research ([facebookresearch/MUSE](https://github.com/facebookresearch/MUSE)),
-covering source words ranked 5000–6500 by frequency. Each line is
-`source_word target_word`, and a source word can have more than one valid
-translation.
+The `dicts/` files are the standard **MUSE** test sets from Facebook Research
+([facebookresearch/MUSE](https://github.com/facebookresearch/MUSE)). They
+contain source words ranked 5000–6500 by frequency, one `source target` pair
+per line. A word can have several correct translations. MUSE data is licensed
+CC BY-NC 4.0.
 
-| File | Pairs |
-|---|---|
-| `en-de.5000-6500.txt` | 3,660 |
-| `de-en.5000-6500.txt` | 2,827 |
-| `en-es.5000-6500.txt` | 2,975 |
-| `es-en.5000-6500.txt` | 2,416 |
-| `en-ru.5000-6500.txt` | 2,447 |
-| `ru-en.5000-6500.txt` | 2,069 |
+| File | Pairs | Source words |
+|---|---:|---:|
+| `en-de.5000-6500.txt` | 3,660 | 1,500 |
+| `de-en.5000-6500.txt` | 2,827 | 1,500 |
+| `en-es.5000-6500.txt` | 2,975 | 1,500 |
+| `es-en.5000-6500.txt` | 2,416 | 1,500 |
+| `en-ru.5000-6500.txt` | 2,447 | 1,500 |
+| `ru-en.5000-6500.txt` | 2,069 | 1,500 |
 
-MUSE data is distributed under its own licence (CC BY-NC 4.0); check it
-before reusing these files.
-
-## Data the scripts expect (not included)
-
-| Path in code | What it is |
-|---|---|
-| `data\final_en-es_clustering_50k.vec` | Aligned EN–ES BUC embeddings, 50k vocabulary |
-| `data\finalWordENESPT.vec` | Aligned EN–ES–PT embeddings (used by `main.py`) |
-| `PreUni3Concepts-final.txt` | JSON-lines file mapping concept GUIDs to word lists |
-| `UnSup-vectors-en.txt` | Neighbour list that `translate.py` scores |
-| `dicts\en-es.5000-6500.txt` | Same as the root-level `en-es` file, expected in a `dicts\` folder |
-
-Any 300-dimensional, cross-lingually aligned `.vec` file (for example the
-aligned fastText vectors published by MUSE) should work in place of the BUC
-files.
-
-## Running (once the data is in place)
+## Reproducing the demo
 
 ```bash
-# 1. Nearest neighbours for every source word (slow: pure-Python brute force)
-python WE-10MostSimilarWords-MT.py
-
-# 2. Score them (translate.py is Python 2 code; see below)
-python2 translate.py
-
-# Exploration: neighbours and analogies
-python main.py
+pip install numpy spacy wordfreq
+mkdir models && cd models
+for m in en_core_web_lg es_core_news_lg de_core_news_lg ru_core_news_lg; do
+  curl -LO https://github.com/explosion/spacy-models/releases/download/$m-3.8.0/$m-3.8.0-py3-none-any.whl
+  python -m zipfile -e $m-3.8.0-py3-none-any.whl .
+done
+cd ..
+python tools/build_demo_vectors.py --models-dir models --out vectors   # ~5 min
+python -m bwss run-all --vectors-dir vectors                          # ~25 min on 2 cores (CSLS stats, cached after)
+python -m unittest discover -s tests -t .
 ```
 
-## Known issues
+## What changed from version 1
 
-- **Paths are Windows-style and hard-coded** (`data\\...`, `dicts\\...`), and
-  the language pair is fixed in the code. Change the paths to switch pairs.
-- **`translate.py` only runs on Python 2.** It calls `.decode('unicode-escape')`
-  on `str`, which fails on Python 3. The other scripts are Python 3
-  (f-strings, type hints).
-- **`WE-10MostSimilarWords-MT.py` crashes at the end:** it prints a timing
-  using `t2`, which is only defined inside a commented-out threading block.
-  The results file has already been written by then.
-- **The neighbour file and the scorer do not line up.** Step 2 writes
-  `similarword-ENES-clusterring50k.txt` as `word<TAB>[(score, word), ...]`,
-  but `translate.py` reads `UnSup-vectors-en.txt` and splits on spaces. Some
-  conversion step was used between them and is not in the repo.
-- **Accuracy is divided by the number of neighbour lists, not by the number
-  of test words,** so words missing from the vocabulary are not counted as
-  misses.
-- **The search is slow.** Every query is a pure-Python scan over the whole
-  vocabulary. NumPy matrix multiplication would make it orders of magnitude
-  faster.
-- In `main.py`, the analogy redundancy filter reloads both concept files for
-  every candidate word.
+Version 1 (see git history) was a set of research scripts that couldn't run:
+
+* `translate.py` was Python 2 only; the other scripts were Python 3.
+* The neighbour script wrote a file format the scorer couldn't read, and it
+  crashed at the end with an undefined variable.
+* Paths were hard-coded Windows paths, and the language pair was fixed in
+  the code.
+* Search was a pure-Python loop over every word in the vocabulary.
+* Accuracy was divided by the number of neighbour lists, not the number of
+  test words.
+
+All of that is replaced by the `bwss` package. The original cleaning rules
+(drop punctuation-edged tokens, merge near-duplicates) are kept behind
+`--clean`. The analogy filter that depended on the private BUC concept file
+(`PreUni3Concepts-final.txt`) was dropped.
 
 ## Credits
 
-`load.py`, `vectors.py`, `word.py` and the analogy logic in `main.py` look
-adapted from Martin Konicek's public *word vectors* tutorial code. The test
-dictionaries come from Facebook Research's MUSE project.
+Test dictionaries: Facebook Research MUSE. Version 1's loader and analogy
+code were adapted from Martin Konicek's public word-vectors tutorial. Demo
+vectors: spaCy models (MIT) and `wordfreq` (Apache 2.0 code, CC BY-SA data).
