@@ -1,5 +1,21 @@
 # Cross-lingual Word Embeddings with Universal Concepts
 
+Code for *Learning Cross-lingual Word Embeddings with Universal Concepts*
+(Sheinidashtegol & Musaev, International Journal on Web Service Computing
+10(3), 13–20, 2019, [doi:10.5121/ijwsc.2019.10302](https://doi.org/10.5121/ijwsc.2019.10302)).
+It trains Bilingual Universal Concepts (BUC) embeddings and evaluates
+cross-lingual embeddings in general.
+
+```bibtex
+@article{sheinidashtegol2019buc,
+  title   = {Learning Cross-lingual Word Embeddings with Universal Concepts},
+  author  = {Sheinidashtegol, Pezhman and Musaev, Aibek},
+  journal = {International Journal on Web Service Computing},
+  volume  = {10}, number = {3}, pages = {13--20}, year = {2019},
+  doi     = {10.5121/ijwsc.2019.10302}
+}
+```
+
 Evaluates **cross-lingual word embeddings** with two standard tests:
 
 1. **Word translation.** For every word in a bilingual test dictionary, look
