@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.cache/
+vectors/
+models/
+*.whl
+*.vec
+*.npz
